@@ -7,7 +7,7 @@ REM Add all files to the staging area
 git add .
 
 REM Commit the changes
-git commit -m "initials commit for server"
+git commit -m "option chain detail added"
 
 REM Rename the default branch to 'main'
 git branch -M main
