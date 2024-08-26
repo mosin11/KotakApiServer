@@ -30,7 +30,7 @@ exports.authenticate = async (req, res) => {
             'username': APIUsername,
             'password': APIpassword
         });
-
+        console.log("tokenBody",tokenBody,"baseURL",baseURL)
         const tokenResponse = await axios.post(`${baseURL}/oauth2/token`, tokenBody, {
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
@@ -57,6 +57,7 @@ exports.authenticate = async (req, res) => {
                 },
                 data: tokendata
             };
+            logger.info("config",config)
             const loginResponse = await axios(config);
             
             // Send the login response
