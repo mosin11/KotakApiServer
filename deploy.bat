@@ -7,7 +7,7 @@ REM Add all files to the staging area
 git add .
 
 REM Commit the changes
-git commit -m "added live optioandata from websoclet"
+git commit -m "postgress db added"
 
 REM Rename the default branch to 'main'
 git branch -M main

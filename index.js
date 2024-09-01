@@ -13,11 +13,14 @@ app.use(express.json());
 app.use(cors());
 app.use(bodyParser.json());
 // Middleware
+logger.info('Middleware setup complete');
 app.use(express.static(path.join(__dirname, 'public'))); // Serve static files if needed
-
+logger.info('Static files served from public directory');
 // Routes
 app.use('/api', authRoutes);
+logger.info('Auth routes mounted on /api');
 app.use('/data', optionsData);
+logger.info('Options data routes mounted on /data');
 
 // Start the server
 const PORT = process.env.PORT || 3000;

@@ -1,103 +1,146 @@
-const express = require('express');
+
 const axios = require('axios');
-const { Worker } = require('worker_threads');
+const Papa = require('papaparse');
 const { Readable } = require('stream');
+const db = require('../database/db'); // Import your db.js file
 const logger = require('../logger/logger');
-const path = require('path');  // Include path module
+require('dotenv').config();
 
-
-// Desired columns
 const desiredColumns = [
-  'pSymbol', 'pExchSeg', 'pSymbolName',
-  'pTrdSymbol', 'pOptionType', 'pScripRefKey',
-  'lExpiryDate ', 'dStrikePrice'
+  'psymbol', 'pexchSeg', 'psymbolName',
+  'ptrdsymbol', 'poptiontype', 'pscriprefkey',
+  'lexpiryDate', 'dstrikeprice'
 ];
-//const worker = new Worker(path.resolve(__dirname, '../csvWorkerController/csvWorker.js'));  // Use path.resolve
-// Function to process a chunk using a worker
-function processChunkInWorker(csvChunk) {
-  return new Promise((resolve, reject) => {
-      const worker = new Worker(path.resolve(__dirname, '../csvWorkerController/csvWorker.js'));
 
-      worker.on('message', (message) => {
-          if (message.error) {
-              reject(new Error(message.error));
-          } else {
-              resolve(message.data);
+ // Function to create table
+ async function createTableFromCSVHeadersInCSVfun(tableName,headers) {
+    logger.info("Creating table from CSV headers");
+    try {
+        const headersRow = headers.map(col => col);
+      await db.createTableFromCSVHeaders(tableName, headersRow);
+    } catch (err) {
+      logger.error(`Error creating table from CSV headers:`, err);
+      throw err; // Propagate the error
+    }
+  }
+ // Function to insert a row into the database
+ async function insertRowIntoDB(tableName,row) {
+    try {
+         let status = await db.insertRowIntoTable(tableName, row);
+      return status;
+    } catch (err) {
+      logger.error(`Error inserting row into table:`, err);
+      return false;
+      //throw err; // Propagate the error
+    }
+  }
+  function renameKeysToLowercase(obj) {
+    const renamedObj = {};
+    for (const key in obj) {
+      if (obj.hasOwnProperty(key)) {
+        // Convert the key to lowercase and trim any surrounding whitespace
+        const newKey = key.replace(/[\s;]+$/, '').trim().toLowerCase();
+        renamedObj[newKey] = obj[key];
+      }
+    }
+    return renamedObj;
+  }
+
+
+
+  function filterColumns(row, desiredColumns) {
+    const filtered = {};
+    const rowData =renameKeysToLowercase(row);
+  // Normalize desiredColumns by removing unwanted characters
+  const normalizedDesiredColumns = desiredColumns.map(col => col);
+  for (const column of normalizedDesiredColumns) {
+    const columnName = column.toLowerCase().trim();
+    let value = rowData[columnName] || null;
+    if (columnName === 'dstrikeprice' && value !== null) {
+      value = parseInt(value, 10)/100; // Parse integer
+    }
+    
+    if (columnName === 'lexpirydate' && value !== null) {
+      value = parseInt(value, 10)+315513000; // Parse integer, or handle as needed
+    }
+    filtered[columnName] = value;
+  }
+    return filtered;
+  }
+  // Function to process CSV and insert data into DB
+  async function processAndInsertCSV(csvData, tableName) {
+    logger.info("Processing CSV data");
+  
+    // Parse the CSV data using PapaParse
+    return new Promise((resolve, reject) => {
+      Papa.parse(csvData, {
+        header: true, // Automatically extract headers
+        dynamicTyping: true, // Automatically typecast numeric values
+        skipEmptyLines: true, // Skip empty lines
+        complete: async (results) => {
+          const headers = results.meta.fields.map(header => header.replace(/[\s;]+$/, '').trim().toLowerCase());
+          try {
+            // Create the table based on the extracted headers
+            await createTableFromCSVHeadersInCSVfun(tableName, headers);
+            logger.info("Table creation completed successfully.");
+  
+            // Process each row in the parsed data
+           let statuscheck=false
+            for (const row of results.data) {
+                
+              const filteredRow = filterColumns(row, desiredColumns);
+              if (filteredRow) { // Only insert rows that match the filter condition
+                statuscheck=   await insertRowIntoDB(tableName, filteredRow);
+              }
+              if(statuscheck){
+                throw "error";
+              }
+       
+    }
+            logger.info("CSV processing and insertion completed.");
+            resolve();
+        
+          } catch (err) {
+            logger.error('Error during CSV processing or insertion:', err);
+            reject(err);
           }
+        },
+        error: (err) => {
+          logger.error('Error occurred while parsing CSV:', err); 
+          reject(err);
+        }
       });
-
-      worker.on('error', (error) => {
-          reject(error);
-      });
-
-      worker.on('exit', (code) => {
-          if (code !== 0) {
-              reject(new Error(`Worker stopped with exit code ${code}`));
-          }
-      });
-
-      worker.postMessage({ csvChunk, desiredColumns });
-  });
-}
+    });
+  }
 
 async function processCsvFile(req, res) {
   try {
-      const urls = req.body; // Get URLs from request body
-      logger.info(`Received URLs: ${JSON.stringify(urls)}`);
+    // URLs to process
+     // Prepare the table name
+     const urls = req.body;
+     const tableName = 'com_masterscript';
+    //const urls = ['https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/2024-08-31/transformed/nse_fo.csv'];
+    logger.info(`Received URLs: ${JSON.stringify(urls)}`);
 
-      if (!Array.isArray(urls) || urls.length === 0) {
-          return res.status(400).json({ error: 'No URLs provided' });
+    if (!Array.isArray(urls) || urls.length === 0) {
+      return res.status(400).json({ error: 'No URLs provided' });
+    }
+    // Process each URL
+    for (const url of urls) {
+      try {
+        const response = await axios.get(url);
+        const csvData = response.data;
+        await processAndInsertCSV(csvData,tableName);
+      } catch (error) {
+        logger.error(`Error processing URL ${url}: ${error.message}`);
+        return res.status(500).json({ error: `Error processing URL ${url}: ${error.message}` });
       }
+    }
 
-      console.time('CSV Processing Time');
-
-      const results = [];
-
-      for (const url of urls) {
-          console.time(`Processing ${url}`);
-          try {
-              const response = await axios.get(url);
-              const csvData = response.data;
-
-              // Define chunk size (number of lines per chunk)
-              const CHUNK_SIZE = 1000; // Adjust based on your data size and system capabilities
-
-              const lines = csvData.split(/\r?\n/);
-              const headerLine = lines.shift(); // Extract header line
-              const chunks = [];
-
-              // Prepare chunks with headers
-              for (let i = 0; i < lines.length; i += CHUNK_SIZE) {
-                  const chunkLines = lines.slice(i, i + CHUNK_SIZE);
-                  const chunk = [headerLine, ...chunkLines].join('\n');
-                  chunks.push(chunk);
-              }
-
-              // Process chunks in parallel with a concurrency limit
-              const concurrencyLimit = 5; // Adjust based on system capabilities
-              const chunkResults = [];
-
-              while (chunks.length > 0) {
-                  const chunkBatch = chunks.splice(0, concurrencyLimit);
-                  const processedChunks = await Promise.all(chunkBatch.map(processChunkInWorker));
-                  chunkResults.push(...processedChunks);
-              }
-
-              results.push(...chunkResults.flat());
-
-              console.timeEnd(`Processing ${url}`);
-          } catch (error) {
-              logger.error(`Error processing URL ${url}: ${error.message}`);
-              return res.status(500).json({ error: `Error processing URL ${url}: ${error.message}` });
-          }
-      }
-
-      console.timeEnd('CSV Processing Time');
-
-      res.status(200).json(results);
+    res.status(200).json({ message: 'CSV data processed and inserted successfully.' });
   } catch (error) {
-      logger.error(`Error processing CSV files: ${error.message}`);
-      res.status(500).json({ error: 'Internal Server Error' });
+    logger.error(`Error processing CSV files: ${error.message}`);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 }
 
